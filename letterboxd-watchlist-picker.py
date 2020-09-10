@@ -1,14 +1,14 @@
 import urllib.request
+from urllib.error import HTTPError
+from http.client import InvalidURL
 from bs4 import BeautifulSoup
 from PIL import ImageTk, Image
-import random
+from random import choice
 import tkinter as tk
-import requests
-import shutil
+from requests.exceptions import ConnectionError
 import threading, time
-import os
-import webbrowser
-import io
+from webbrowser import open_new
+from io import BytesIO
 
 class Threader(threading.Thread):
     def __init__(self, *args, **kwargs):
@@ -29,7 +29,11 @@ def get_films_single(profile):
     films_list = []
 
     url = url_watchlist + '1/'
-    page = urllib.request.urlopen(url)
+    try:
+        page = urllib.request.urlopen(url)
+    except:
+        raise
+
     html = page.read().decode("utf-8")
     soup = BeautifulSoup(html, "html.parser")
 
@@ -85,7 +89,7 @@ def get_film_details(film):
 
     # getting the image
     raw_data = urllib.request.urlopen(req).read()
-    im = Image.open(io.BytesIO(raw_data))
+    im = Image.open(BytesIO(raw_data))
     image = ImageTk.PhotoImage(im)
     
     return image, rating, url
@@ -94,33 +98,60 @@ def full_routine():
     global first_time
     global all_films, intersection_films
     global profile1, profile2
-    global frame2
+    global frame2, error
+
+    error.pack_forget()
 
     if not first_time:
         for widget in frame2.winfo_children():
             widget.destroy()
-    
+
     if(first_time or (profile1 != entry_profile1.get() or profile2 != entry_profile2.get())):
+        # if it's the first time fetching the films or if a user has changed
         profile1 = entry_profile1.get()
         profile2 = entry_profile2.get()
-        list1 = get_films_single(profile1)
-        list2 = get_films_single(profile2)
+
+        if((not profile1) and (not profile2)):
+            error.config(text="Please insert at least one username.")
+            error.pack(pady=5)
+            # first time has to be reset to true if it's false
+            first_time=True
+            return
+            
+        try:
+            list1 = get_films_single(profile1)
+            list2 = get_films_single(profile2)
+            all_films = set(list1 + list2)
+            intersection_films = [film for film in list1 if film in list2] 
+            first_time=False
+
+        except (HTTPError, InvalidURL, UnicodeEncodeError):
+            error.config(text="Please check the usernames and try again.")
+            error.pack(pady=5)
+            return
+        
+        except ConnectionError:
+            error.config(text="There was a problem connecting to the letterboxd website.")
+            error.pack(pady=5)
+            return
 
         # set() below just to make sure there are no duplicates -- since a film can be in both lists
-        all_films = set(list1 + list2)
-        intersection_films = [film for film in list1 if film in list2] 
-        first_time=False
-
+        
     # choose the film
-    if(intersection_priority.get()==1):
-        if intersection_films:
-            # get film from intersection list
-            film = random.choice(list(intersection_films))
+    try:
+        if(intersection_priority.get()==1):
+            if intersection_films:
+                # get film from intersection list
+                film = choice(list(intersection_films))
+            else:
+                # no films in intersection, display text
+                film = choice(list(all_films))
         else:
-            # no films in intersection, display text
-            film = random.choice(list(all_films))
-    else:
-        film = random.choice(list(all_films))
+            film = choice(list(all_films))
+    except IndexError:
+        error.config(text="No movies were found.")
+        error.pack(pady=5)
+        return
 
     # download the poster
     img, rating, url = get_film_details(film)
@@ -136,7 +167,7 @@ def full_routine():
     # display the film name hyperlink
     link1 = tk.Label(frame2, text=film[0], fg="blue", cursor="hand2")
     link1.pack()
-    link1.bind("<Button-1>", lambda e: webbrowser.open_new(url))
+    link1.bind("<Button-1>", lambda e: open_new(url))
 
     # display the rating
     rating_label = tk.Label(master=frame2, text=rating)
@@ -151,44 +182,47 @@ def full_routine():
     
     frame2.pack()
 
-# Global variables to auxiliate the proccess
+# global variables to auxiliate the proccess
 all_films, intersection_films = [], []
 first_time = True
 profile1, profile2 = '', ''
 
-# Set-up the window
+# set-up the window
 window = tk.Tk()
 window.title("Watchlist Picker")
 window.resizable(False, False)
 frame = tk.Frame(pady = 20, padx = 20)
 frame2 = tk.Frame(pady = 20, padx = 20)
 
-# Add text
+# add text
 title = tk.Label(text="Letterboxd Unofficial Watchlist Picker", master=frame)
 title.pack()
 
 description_txt =\
-"Hello! Please input 2 different letterboxd users on each box below and the application will choose one movie\
-that is one one of the users' watchlists."
+"Hello! Please input 1 or 2 letterboxd users below and one movie will be randomly chosen.\
+If you check the box below, priority will be given to films on both watchlists."
 description = tk.Label(text=description_txt, wraplength=200, justify='left', master=frame)
 description.pack(pady=5)
 
-# Create the entry for the second profile
+# create the entry for the second profile
 entry_profile1 = tk.Entry(fg="#ff8000", bg="#333333", width=33, master=frame)
 entry_profile1.pack()
 
 entry_profile2 = tk.Entry(fg="#40bcf4", bg="#333333", width=33, master=frame)
 entry_profile2.pack()
 
-# Create the "Give priority to films in both watchlists"
+# create the "Give priority to films in both watchlists"
 intersection_priority = tk.IntVar()
 check = tk.Checkbutton(master=frame, text="Give priority to films in both watchlists", variable=intersection_priority)
 check.pack()
 
-# Create the trigger button
+# create the trigger button
 button = tk.Button(text="Run", bg="#00e054", fg="#333333", master=frame, cursor="hand2", command= lambda: Threader(name='Start-Routine'))
 button.pack(pady=5)
 
-# Pack the frame & Run it
+# create error message (won't be displayed unless an error is thrown)
+error = tk.Label(text="Error.", wraplength=200, justify='left', master=frame)
+
+# pack the frame & Run it
 frame.pack()
 window.mainloop()
