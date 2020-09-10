@@ -1,4 +1,4 @@
-from urllib.request import urlopen
+import urllib.request
 from bs4 import BeautifulSoup
 from PIL import ImageTk, Image
 import random
@@ -7,6 +7,8 @@ import requests
 import shutil
 import threading, time
 import os
+import webbrowser
+import io
 
 class Threader(threading.Thread):
     def __init__(self, *args, **kwargs):
@@ -16,9 +18,10 @@ class Threader(threading.Thread):
 
     def run(self):
         button.config(state=tk.DISABLED)
+        button.config(text="Running...", cursor='wait')
         full_routine()
         button.config(state=tk.NORMAL)
-        button.config(text="Run again")
+        button.config(text="Run again", cursor='arrow')
         
 def get_films_single(profile):
     url_base = "https://letterboxd.com/"
@@ -26,7 +29,7 @@ def get_films_single(profile):
     films_list = []
 
     url = url_watchlist + '1/'
-    page = urlopen(url)
+    page = urllib.request.urlopen(url)
     html = page.read().decode("utf-8")
     soup = BeautifulSoup(html, "html.parser")
 
@@ -34,7 +37,7 @@ def get_films_single(profile):
     while soup.find_all('li', class_='paginate-current') != []:
 
         url = url_watchlist + '{}/'.format(i)
-        page = urlopen(url)
+        page = urllib.request.urlopen(url)
         html = page.read().decode("utf-8")
         soup = BeautifulSoup(html, "html.parser")
 
@@ -55,6 +58,37 @@ def get_films_single(profile):
         i+=1
 
     return films_list
+
+def get_film_details(film):
+    url = "https://letterboxd.com/film/" + film[1]
+    page = urllib.request.urlopen(url)
+    html = page.read().decode("utf-8")
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # getting the film poster
+    poster_div = soup.find('div', class_='film-poster')
+    poster_div = poster_div.find('img')
+    poster_url = poster_div['src']
+    
+    # getting the rating
+    rating = soup.find(attrs={"name": "twitter:data2"})['content']
+
+    # header for requesting website data
+    hdr = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.11 (KHTML, like Gecko) Chrome/23.0.1271.64 Safari/537.11',
+       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+       'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.3',
+       'Accept-Encoding': 'none',
+       'Accept-Language': 'en-US,en;q=0.8',
+       'Connection': 'keep-alive'}
+
+    req = urllib.request.Request(poster_url, headers=hdr)
+
+    # getting the image
+    raw_data = urllib.request.urlopen(req).read()
+    im = Image.open(io.BytesIO(raw_data))
+    image = ImageTk.PhotoImage(im)
+    
+    return image, rating, url
 
 def full_routine():
     global first_time
@@ -81,65 +115,46 @@ def full_routine():
     if(intersection_priority.get()==1):
         if intersection_films:
             # get film from intersection list
-            total = tk.Label(master=frame2, text ="Total of {} different films".format(len(intersection_films)))
             film = random.choice(list(intersection_films))
         else:
             # no films in intersection, display text
-            total = tk.Label(master=frame2, text ="Total of {} different films".format(len(intersection_films)))
             film = random.choice(list(all_films))
     else:
-        total = tk.Label(master=frame2, text ="Total of {} different films".format(len(all_films)))
         film = random.choice(list(all_films))
 
     # download the poster
-    get_poster(film)
+    img, rating, url = get_film_details(film)
 
     # add the second frame with the chosen film
     window.geometry("500x800")
     
     # load and display the image poster
-    load = Image.open('{}.jpg'.format(film[1]))
-    render = ImageTk.PhotoImage(load)
-    poster = tk.Label(master=frame2, image=render)
-    poster.image = render
+    poster = tk.Label(master=frame2, image=img)
+    poster.image = img
     poster.pack()
 
-    # display the film name and total of different films
-    film_name = tk.Label(master=frame2, text=film[0])
-    film_name.pack()
-    total.pack()
+    # display the film name hyperlink
+    link1 = tk.Label(frame2, text=film[0], fg="blue", cursor="hand2")
+    link1.pack()
+    link1.bind("<Button-1>", lambda e: webbrowser.open_new(url))
+
+    # display the rating
+    rating_label = tk.Label(master=frame2, text=rating)
+    rating_label.pack()
+
+    # display the total of different films
+    total_label = tk.Label(master=frame2, text ="Total of {} different films on at least one of the watchlists.".format(len(all_films)))
+    total_label.pack()
+
+    intersection_label = tk.Label(master=frame2, text ="{} films on both watchlists.".format(len(intersection_films)))
+    intersection_label.pack()
+    
     frame2.pack()
-
-def get_poster(film):
-    global images_downloaded
-    url = "https://letterboxd.com/film/" + film[1]
-    page = urlopen(url)
-    html = page.read().decode("utf-8")
-    soup = BeautifulSoup(html, "html.parser")
-    poster_div = soup.find('div', class_='film-poster')
-    
-    
-    poster_div = poster_div.find('img')
-    img_url = poster_div['src']
-    response = requests.get(img_url, stream = True)
-    if response.status_code == 200:
-        response.raw.decode_content = True
-        filename = "{}.jpg".format(film[1])
-        with open(filename,'wb') as f:
-            images_downloaded.add(filename)
-            shutil.copyfileobj(response.raw, f)
-
-def clean_images():
-    for file in images_downloaded:
-        os.remove(file)
-    exit()
-
 
 # Global variables to auxiliate the proccess
 all_films, intersection_films = [], []
 first_time = True
 profile1, profile2 = '', ''
-images_downloaded = set()
 
 # Set-up the window
 window = tk.Tk()
@@ -171,10 +186,9 @@ check = tk.Checkbutton(master=frame, text="Give priority to films in both watchl
 check.pack()
 
 # Create the trigger button
-button = tk.Button(text="Run", bg="#00e054", fg="#333333", master=frame, command= lambda: Threader(name='Start-Routine'))
+button = tk.Button(text="Run", bg="#00e054", fg="#333333", master=frame, cursor="hand2", command= lambda: Threader(name='Start-Routine'))
 button.pack(pady=5)
 
 # Pack the frame & Run it
 frame.pack()
-window.protocol("WM_DELETE_WINDOW", clean_images)
 window.mainloop()
